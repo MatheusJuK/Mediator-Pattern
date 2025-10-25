@@ -1,40 +1,39 @@
+import devices.*;
+import input.Echo;
 import mediator.AlexaMediator;
-import devices.Light;
-import devices.CoffeeMachine;
-import devices.TV;
 
-/**
- * Simulação de uma casa inteligente usando o padrão Mediator.
- * O cliente (usuário) interage diretamente com o Mediador (Alexa).
- */
 public class Main {
     public static void main(String[] args) {
         AlexaMediator alexa = new AlexaMediator();
 
+        alexa.addDevice(new Luz("Luz da Sala"));
+        alexa.addDevice(new Cafeteira());
+        alexa.addDevice(new ArCondicionado());
+        alexa.addDevice(new TV());
+        alexa.addDevice(new Relogio());
 
-        Light light = new Light(alexa, "Luz da Sala");
-        CoffeeMachine coffeeMachine = new CoffeeMachine(alexa, "Cafeteira");
-        TV tv = new TV(alexa, "TV da Sala");
+        Echo echo = new Echo(alexa);
 
+        // ================== TESTES DE COMANDOS ==================
+        String[] comandos = {
+                "Ligar luz da sala",
+                "Ligar ar condicionado",
+                "Ligar TV e cafeteira",
+                "Desligar TV",
+                "Apagar luz da sala",
+                "Quero fazer um café e ligar o ar daqui a 10 segundos",
+                "Preparar café e ligar luz",
+                "Desligar ar condicionado e cafeteira"
+        };
 
-        alexa.setLight(light);
-        alexa.setCoffeeMachine(coffeeMachine);
-        alexa.setTV(tv);
+        System.out.println("========== TESTES DE COMANDOS SMART HOME ==========\n");
 
-        System.out.println("=== TESTES DE COMANDOS COMPLEXOS ===");
+        for (String comando : comandos) {
+            echo.ouvirComando(comando);
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+        }
 
-
-        System.out.println("------------------------------------");
-        alexa.sendCommand("Fazer café, acender luz da sala");
-
-        System.out.println("------------------------------------");
-        alexa.sendCommand("Desligar TV; apagar luz");
-
-        System.out.println("------------------------------------");
-        alexa.sendCommand("Tocar música");
-
-        System.out.println("------------------------------------");
-
-        alexa.sendCommand("Desligar luz e fazer café");
+        // Mantém programa ativo para esperar execuções agendadas
+        try { Thread.sleep(15000); } catch (InterruptedException ignored) {}
     }
 }

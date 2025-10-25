@@ -1,117 +1,152 @@
 package mediator;
 
-import devices.CoffeeMachine;
-import devices.Light;
-import devices.SmartDevice;
-import devices.TV;
-import java.util.Arrays;
+import devices.*;
+import java.util.*;
+import java.util.regex.*;
+import java.text.Normalizer;
 
-/**
- * Mediador Concreto (Concrete Mediator) - A Alexa.
- * É responsável por interpretar comandos do usuário e coordenar as ações entre os dispositivos.
- * Centraliza a comunicação e a lógica de roteamento (identificação do dispositivo).
- */
 public class AlexaMediator implements SmartHomeMediator {
+    private final Map<String, SmartDevice> devices = new HashMap<>();
 
-    // Referências aos Colaboradores que o Mediador coordena
-    private Light light;
-    private CoffeeMachine coffeeMachine;
-    private TV tv;
+    // Pré-compilamos padrões para detecção mais robusta
+    private final Pattern pCafeteira = Pattern.compile("\\b(cafe|cafeteira)\\b");
+    private final Pattern pAr = Pattern.compile("\\b(ar|condicionado|arcondicionado)\\b");
+    private final Pattern pLuz = Pattern.compile("\\b(luz|sala)\\b");
+    private final Pattern pTV = Pattern.compile("\\b(tv|televisao|televisão|televisao)\\b");
 
-    // Métodos de registro (Setters) - Permitem que o cliente configure o Mediador
-    public void setLight(Light light) {
-        this.light = light;
+    private final Pattern pLigar = Pattern.compile("\\b(ligar|ligue|abrir|preparar|fazer|liga)\\b");
+    private final Pattern pDesligar = Pattern.compile("\\b(desligar|desliga|apagar|fechar)\\b");
+
+    public void addDevice(SmartDevice device) {
+        devices.put(device.getName().toLowerCase(), device);
     }
 
-    public void setCoffeeMachine(CoffeeMachine coffeeMachine) {
-        this.coffeeMachine = coffeeMachine;
-    }
-
-    public void setTV(TV tv) {
-        this.tv = tv;
-    }
-
-    /**
-     * Implementação do método de comunicação.
-     * Recebe um comando (do cliente ou de outro dispositivo) e roteia a ação.
-     * @param command O comando de voz completo.
-     * @param sender O dispositivo que enviou o comando (null se for o Main/Cliente).
-     */
     @Override
-    public void sendCommand(String command, SmartDevice sender) {
-        if (command == null || command.isBlank()) {
-            System.out.println("[ALEXA] Comando vazio. Nenhum comando reconhecido.");
+    public void sendCommand(String command) {
+        System.out.println("\n[Alexa] 🎤 Comando recebido: \"" + command + "\"");
+        if (command == null || command.trim().isEmpty()) return;
+
+        // Normaliza: remove acentos e deixa tudo lowercase
+        command = removeAccents(command).toLowerCase().trim();
+
+        // Split em subcomandos — non-capturing group e \b para "e" isolado
+        String[] subCommands = command.split("\\s*(?:\\be\\b|,|;|\\bentao\\b)\\s*");
+
+        for (String raw : subCommands) {
+            String sub = raw.trim();
+            if (shouldIgnoreSubcommand(sub)) continue;
+            handleSubCommand(sub);
+        }
+    }
+
+    private void handleSubCommand(String cmd) {
+        int delay = parseDelay(cmd);
+
+        boolean wantsLigar = pLigar.matcher(cmd).find();
+        boolean wantsDesligar = pDesligar.matcher(cmd).find();
+
+        // Se não tiver verbo explícito, assumimos ação "ligar" para dispositivos como cafeteira/café
+        boolean assumeLigar = !wantsLigar && !wantsDesligar;
+
+        // coletamos dispositivos alvo sem duplicação (Set)
+        Set<SmartDevice> targets = new LinkedHashSet<>();
+
+        if (pCafeteira.matcher(cmd).find()) {
+            SmartDevice d = devices.get("cafeteira");
+            if (d != null) targets.add(d);
+        }
+        if (pAr.matcher(cmd).find()) {
+            SmartDevice d = devices.get("ar condicionado");
+            if (d != null) targets.add(d);
+        }
+        if (pLuz.matcher(cmd).find()) {
+            SmartDevice d = devices.get("luz da sala");
+            if (d != null) targets.add(d);
+        }
+        if (pTV.matcher(cmd).find()) {
+            SmartDevice d = devices.get("tv");
+            if (d != null) targets.add(d);
+        }
+
+        if (targets.isEmpty()) {
+            System.out.println("[Alexa] ⚠️ Nenhum dispositivo correspondente encontrado em: \"" + cmd + "\"");
             return;
         }
 
-        System.out.println("\n[ALEXA] Comando recebido de " +
-                (sender != null ? sender.getName() : "Cliente/Main") +
-                ": \"" + command + "\"");
+        // Prepara ações (cada dispositivo apenas uma vez)
+        List<Runnable> actions = new ArrayList<>();
+        for (SmartDevice device : targets) {
+            if (wantsLigar) actions.add(() -> safeExecute(device, true));
+            else if (wantsDesligar) actions.add(() -> safeExecute(device, false));
+            else if (assumeLigar) actions.add(() -> safeExecute(device, true));
+        }
 
-        // Normaliza o texto para minúsculas para facilitar a correspondência
-        String normalized = command.toLowerCase();
+        // Execução com delay (simulado)
+        if (delay > 0) {
+            System.out.println("[Alexa] ⏳ Ações agendadas para daqui a " + delay + " segundos (simulação)...");
+            new Timer().schedule(new TimerTask() {
+                @Override
+                public void run() {
+                    actions.forEach(Runnable::run);
+                    System.out.println("[Alexa] ✅ Execução concluída: \"" + cmd + "\"");
+                }
+            }, delay * 1000L);
+        } else {
+            actions.forEach(Runnable::run);
+        }
+    }
 
-        // Quebra a string em subcomandos lógicos usando conectores como "e", ",", ";"
-        // Isso permite comandos complexos como "ligar luz e fazer café"
-        String[] subCommands = normalized.split("\\s+(e|e|ou|;|,)\\s+");
-
-        for (String subCommand : subCommands) {
-            String trimmedCommand = subCommand.trim();
-            if (!trimmedCommand.isEmpty()) {
-                processSingleCommand(trimmedCommand);
+    // Executa ligar/desligar de forma segura (evita redundância) com mensagens claras
+    private void safeExecute(SmartDevice device, boolean turnOn) {
+        String name = device.getName();
+        if (turnOn) {
+            if (!device.isOn()) {
+                device.turnOn();
+            } else {
+                if(name.equals("Cafeteira")) {
+                    System.out.println("[CAFETEIRA] Preparando café ☕");
+                }else {
+                    System.out.println("[" + name + "] " + name + " já está ligado.");
+                }
+            }
+        } else {
+            if (device.isOn()) {
+                device.turnOff();
+            } else {
+                System.out.println("[" + name + "] " + name + " já está desligado.");
             }
         }
     }
 
-    /**
-     * Processa um subcomando, identificando o dispositivo ideal e enviando a mensagem.
-     * @param command O comando individual, já normalizado.
-     */
-    private void processSingleCommand(String command) {
-
-        SmartDevice targetDevice = identifyDeviceByCommand(command);
-
-        if (targetDevice != null) {
-            targetDevice.receive(command);
-        } else {
-            System.out.println("[ALEXA] Não encontrei nenhum dispositivo capaz de executar: \"" + command + "\"");
+    // Extrai delay (em segundos) da string; mapeia minutos para simulação (1min->10s) e aplica cap
+    private int parseDelay(String cmd) {
+        Matcher m = Pattern.compile("(\\d+)\\s*(minuto|minutos|segundo|segundos)").matcher(cmd);
+        if (m.find()) {
+            int value = Integer.parseInt(m.group(1));
+            String unit = m.group(2);
+            if (unit.startsWith("minut")) {
+                int simulated = Math.max(1, value) * 10; // 1 minuto -> 10s (simulação)
+                return Math.min(simulated, 30);
+            } else {
+                return Math.min(value, 30);
+            }
         }
+        return 0;
     }
 
-    /**
-     * Identifica o dispositivo ideal com base nas palavras-chave do comando (Lógica de Roteamento).
-     * @param command O comando de texto para análise.
-     * @return O SmartDevice destinatário ou null se nenhum for encontrado.
-     */
-    private SmartDevice identifyDeviceByCommand(String command) {
-        if (containsAny(command, "luz", "lampada", "claro", "escuro")) {
-            return light;
-        }
-
-        if (containsAny(command, "café", "cafeteira", "expresso")) {
-            return coffeeMachine;
-        }
-
-        if (containsAny(command, "tv", "televisão", "canal", "filme")) {
-            return tv;
-        }
-
-        return null;
+    // Remove acentos
+    private String removeAccents(String s) {
+        String normalized = Normalizer.normalize(s, Normalizer.Form.NFD);
+        return normalized.replaceAll("\\p{M}", "");
     }
 
-    /**
-     * Método utilitário para verificar se o texto contém alguma das palavras-chave.
-     */
-    private boolean containsAny(String text, String... keywords) {
-        return Arrays.stream(keywords).anyMatch(text::contains);
-    }
-
-    /**
-     * Sobrecarga para permitir que o Cliente (Main) chame a Alexa sem especificar o remetente.
-     * Esta sobrecarga existe apenas para conveniência do cliente.
-     * @param command O comando de voz completo.
-     */
-    public void sendCommand(String command) {
-        sendCommand(command, null);
+    // Ignora pedaços muito curtos ou palavras de enchimento
+    private boolean shouldIgnoreSubcommand(String s) {
+        if (s == null) return true;
+        s = s.trim();
+        if (s.length() < 3) return true; // evita ruído como "d", "pr", etc.
+        String[] fillers = {"por favor", "por favor.", "por favor,", "porfavor", "ok", "obrigado", "obrigada"};
+        for (String f : fillers) if (s.contains(f)) return true;
+        return false;
     }
 }
